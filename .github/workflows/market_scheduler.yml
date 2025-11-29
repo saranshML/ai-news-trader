@@ -2,10 +2,10 @@ name: Market Hour AI Trader
 
 on:
   schedule:
-    # Runs at minute 15 of hours 4 through 10 (UTC)
-    # Equals: 09:45 AM, 10:45 AM ... 3:45 PM IST
-    - cron: '15 4-10 * * 1-5'
-  workflow_dispatch: # Button to run anytime
+    # OPTIMIZED: Runs every 12 minutes (Uses ~80% of daily GitHub quota)
+    # Market Hours: 09:30 AM to 04:18 PM IST
+    - cron: '*/12 4-10 * * 1-5'
+  workflow_dispatch:
 
 jobs:
   trade-bot:
@@ -24,9 +24,11 @@ jobs:
 
       - name: Run AI Trader
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          # MAPPING THE NEW SECRETS HERE:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN2 }} 
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY2 }}
+          # Keeping the chat ID the same (your personal ID)
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python trader_bot.py
 
       - name: Save News Memory
