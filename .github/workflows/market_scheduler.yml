@@ -1,14 +1,12 @@
 name: Market Hour AI Trader
 
-# --- THE FIX: Force GitHub to allow writing ---
 permissions:
   contents: write
 
 on:
   schedule:
-    # Runs every 12 minutes during market hours
     - cron: '*/12 4-10 * * 1-5'
-  workflow_dispatch: # Manual Button
+  workflow_dispatch:
 
 jobs:
   trade-bot:
@@ -16,9 +14,6 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
-        with:
-          # This ensures the git client is authenticated to push back later
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -30,22 +25,15 @@ jobs:
 
       - name: Run AI Trader
         env:
-          # Using your NEW Keys as requested
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN2 }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY2 }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python trader_bot.py
 
+      # --- THE FIX: Use the Auto-Commit Plugin ---
       - name: Save News Memory
-        run: |
-          git config --global user.name 'TraderBot'
-          git config --global user.email 'bot@noreply.github.com'
-          
-          # We check status first to see if file exists
-          git add news_memory.json
-          
-          # Only commit if there are changes (prevents errors)
-          git diff-index --quiet HEAD || git commit -m "Update memory"
-          
-          # Simple push (Authentication handled by the checkout step above)
-          git push
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "🤖 Update News Memory"
+          file_pattern: news_memory.json
+          push_options: '--force'
