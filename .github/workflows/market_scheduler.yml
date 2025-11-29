@@ -1,0 +1,38 @@
+name: Market Hour AI Trader
+
+on:
+  schedule:
+    # Runs at minute 15 of hours 4 through 10 (UTC)
+    # Equals: 09:45 AM, 10:45 AM ... 3:45 PM IST
+    - cron: '15 4-10 * * 1-5'
+  workflow_dispatch: # Button to run anytime
+
+jobs:
+  trade-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.10'
+
+      - name: Install Libraries
+        run: pip install -r requirements.txt
+
+      - name: Run AI Trader
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python trader_bot.py
+
+      - name: Save News Memory
+        run: |
+          git config --global user.name 'TraderBot'
+          git config --global user.email 'bot@noreply.github.com'
+          git add news_memory.json
+          git commit -m "Update memory" || echo "No new trades"
+          git push
