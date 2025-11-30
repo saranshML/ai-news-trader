@@ -127,16 +127,20 @@ def analyze_stock(symbol, chat_id):
         send_telegram(chat_id, msg)
         return
 
-    # --- 3. TECHNICAL FALLBACK CHECK (Lowest Priority) ---
+   # --- 3. TECHNICAL FALLBACK CHECK (Lowest Priority) ---
     try:
+        # Ticker check is inside the function now, so we run the download
         data = yf.download(yf_symbol, period="100d", interval="1d", progress=False)
-        if data.empty:
-            send_telegram(chat_id, f"ℹ️ **No news or data found for {symbol}.**")
-            return
+        
+        # Check if the downloaded data is empty (most common failure point)
+        if data.empty or data['Close'].isnull().all():
+             send_telegram(chat_id, f"❌ CRITICAL ERROR:\nSymbol: {symbol} has no recent data in yfinance or data is corrupted.")
+             return
             
         current_price = data['Close'].iloc[-1]
         dma_50 = data['Close'].rolling(window=50).mean().iloc[-1]
         
+        # --- Continue with the original logic ---
         status = "BULLISH" if current_price > dma_50 else "BEARISH"
         diff_pct = ((current_price - dma_50) / dma_50) * 100
         
@@ -146,7 +150,9 @@ def analyze_stock(symbol, chat_id):
         send_telegram(chat_id, msg)
         
     except Exception as e:
-        send_telegram(chat_id, f"❌ Error retrieving data for {symbol}.")
+        # DEBUG: Send the detailed exception error message back to the user
+        send_telegram(chat_id, f"❌ CRITICAL ERROR (YFinance):\nSymbol: {yf_symbol}\nError Details: {str(e)}")
+        return
 
 
 if __name__ == "__main__":
