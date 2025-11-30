@@ -127,15 +127,15 @@ def analyze_stock(symbol, chat_id):
         send_telegram(chat_id, msg)
         return
 
-  # --- 3. TECHNICAL FALLBACK CHECK (Lowest Priority) ---
+ # --- 3. TECHNICAL FALLBACK CHECK (Lowest Priority) ---
     try:
-        # Ticker check is inside the function now, so we run the download
         data = yf.download(yf_symbol, period="100d", interval="1d", progress=False)
         
-        # --- NEW FINAL DEBUGGER: Check for missing columns ---
+        # --- NEW DEBUGGER: Check for missing columns ---
         if 'Close' not in data.columns:
             columns = ", ".join(data.columns)
-            send_telegram(chat_id, f"❌ COLUMN ERROR:\nSymbol: {symbol} data is missing 'Close' column.\nColumns found: {columns}")
+            # Send the exact column names found
+            send_telegram(chat_id, f"❌ YF DATA ERROR:\nSymbol: {symbol} data is missing 'Close' column.\nColumns found: {columns}")
             return
         # --- END DEBUGGER ---
         
@@ -144,7 +144,7 @@ def analyze_stock(symbol, chat_id):
         
         # FIX 2: Ensure sufficient data length
         if data.empty or len(data) < 50:
-             send_telegram(chat_id, f"❌ CRITICAL ERROR:\nSymbol: {symbol} has insufficient valid data (got {len(data)} days, need 50).")
+             send_telegram(chat_id, f"❌ YF DATA ERROR:\nSymbol: {symbol} has insufficient valid data (got {len(data)} days, need 50).")
              return
             
         current_price = data['Close'].iloc[-1]
