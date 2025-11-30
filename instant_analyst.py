@@ -17,18 +17,32 @@ GEMINI_API_KEY = os.environ['GEMINI_API_KEY']
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-# --- HELPER: SEND TELEGRAM ---
+# --- TELEGRAM HELPER (Now with Message Splitting) ---
 def send_telegram(chat_id, message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": chat_id, 
-        "text": message, 
-        "parse_mode": "Markdown", 
-        "disable_web_page_preview": True
-    }
-    requests.post(url, json=payload)
+    
+    # Telegram limit is 4096 chars. We chunk at 4000 to be safe.
+    chunk_size = 4000
+    
+    for i in range(0, len(message), chunk_size):
+        chunk = message[i:i+chunk_size]
+        payload = {
+            "chat_id": chat_id, 
+            "text": chunk, 
+            "parse_mode": "Markdown", 
+            "disable_web_page_preview": True
+        }
+        try:
+            # Try sending with Markdown
+            response = requests.post(url, json=payload)
+            # If failed (likely due to AI using special chars like * or _ incorrectly)
+            if response.status_code != 200:
+                payload['parse_mode'] = "" # Fallback to Plain Text
+                requests.post(url, json=payload)
+        except Exception as e:
+            print(f"Telegram Error: {e}")
 
-# --- FEATURE 1: PDF ANALYZER (PRO MODEL) ---
+# --- FEATURE 1: PDF ANALYZER (Strict 3-Point Limit) ---
 def analyze_pdf_report(symbol, pdf_url):
     print(f"📥 Downloading PDF from {pdf_url}...")
     try:
@@ -36,34 +50,34 @@ def analyze_pdf_report(symbol, pdf_url):
         response = requests.get(pdf_url, headers=headers, timeout=15)
         response.raise_for_status()
         
-        # Read PDF from memory
         f = io.BytesIO(response.content)
         reader = PdfReader(f)
         text_content = ""
         
-        # Extract text (First 25 pages to capture Summary/MD&A)
-        # Gemini 1.5 Pro has a huge context window, so we can send a lot.
-        max_pages = min(len(reader.pages), 25) 
+        # Limit pages to speed up processing
+        max_pages = min(len(reader.pages), 20) 
         for i in range(max_pages):
             text = reader.pages[i].extract_text()
             if text:
                 text_content += text
             
-        print(f"📄 Extracted {len(text_content)} characters.")
+        print(f"📄 Extracted {len(text_content)} chars.")
 
-        # Using Gemini 1.5 Pro (Best for long documents)
+        # Using 2.5 Pro as requested
         model = genai.GenerativeModel('gemini-2.5-pro') 
         
+        # --- THE UPDATED STRICT PROMPT ---
         prompt = (
             f"STOCK: {symbol}\n"
             f"DOCUMENT TEXT (First {max_pages} pages):\n{text_content}\n\n"
             "ROLE: Senior Equity Research Analyst.\n"
-            "TASK: Analyze this Corporate Filing/Report deepy.\n"
+            "TASK: Analyze this Corporate Filing.\n"
+            "CONSTRAINT: You must provide EXACTLY 3 bullet points per section. Keep them concise.\n\n"
             "OUTPUT FORMAT:\n"
             "📊 **Analysis of Filing**\n\n"
-            "✅ **Pros / Key Strengths:**\n- [Point 1]\n- [Point 2]\n\n"
-            "⚠️ **Cons / Risks:**\n- [Point 1]\n- [Point 2]\n\n"
-            "💡 **Key Highlights:**\n- [Revenue/Profit Stats if available]\n- [Future Guidance]\n\n"
+            "✅ **Top 3 Pros:**\n1. [Strongest Point]\n2. [Point 2]\n3. [Point 3]\n\n"
+            "⚠️ **Top 3 Cons/Risks:**\n1. [Biggest Risk]\n2. [Point 2]\n3. [Point 3]\n\n"
+            "💡 **3 Key Highlights:**\n1. [Financial Metric]\n2. [Future Guidance]\n3. [Strategic Update]\n\n"
             "🎯 **Verdict:** [BULLISH / BEARISH / NEUTRAL]"
         )
         
@@ -73,7 +87,7 @@ def analyze_pdf_report(symbol, pdf_url):
     except Exception as e:
         return f"❌ PDF Error: {str(e)}"
 
-# --- FEATURE 2: STANDARD ANALYZER (FLASH MODEL) ---
+# --- FEATURE 2: STANDARD ANALYZER ---
 def get_ai_verdict(stock, context_type, content):
     try:
         model = genai.GenerativeModel('gemini-2.5-flash')
@@ -109,7 +123,7 @@ def check_for_quarterly_results(symbol):
     return None
 
 def analyze_stock(symbol, chat_id, specific_url=None):
-    # --- PATH A: URL PROVIDED (PDF ANALYSIS) ---
+    # --- PATH A: URL PROVIDED ---
     if specific_url and len(specific_url) > 5:
         send_telegram(chat_id, f"🔄 **Reading Document...**\n{specific_url}")
         analysis = analyze_pdf_report(symbol, specific_url)
