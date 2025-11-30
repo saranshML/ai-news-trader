@@ -132,17 +132,22 @@ def analyze_stock(symbol, chat_id):
         # Ticker check is inside the function now, so we run the download
         data = yf.download(yf_symbol, period="100d", interval="1d", progress=False)
         
-        # FIX 1 (CRITICAL): Clean the data by dropping any rows missing the close price.
+        # --- NEW FINAL DEBUGGER: Check for missing columns ---
+        if 'Close' not in data.columns:
+            columns = ", ".join(data.columns)
+            send_telegram(chat_id, f"❌ COLUMN ERROR:\nSymbol: {symbol} data is missing 'Close' column.\nColumns found: {columns}")
+            return
+        # --- END DEBUGGER ---
+        
+        # FIX 1: Clean the data immediately
         data = data.dropna(subset=['Close'])
         
-        # FIX 2: Ensure we have enough data (at least 50 days for the 50 DMA)
+        # FIX 2: Ensure sufficient data length
         if data.empty or len(data) < 50:
              send_telegram(chat_id, f"❌ CRITICAL ERROR:\nSymbol: {symbol} has insufficient valid data (got {len(data)} days, need 50).")
              return
             
         current_price = data['Close'].iloc[-1]
-        
-        # Calculate 50 DMA (This should now work on clean data)
         dma_50 = data['Close'].rolling(window=50).mean().iloc[-1]
         
         # --- Continue with the original logic ---
@@ -155,7 +160,7 @@ def analyze_stock(symbol, chat_id):
         send_telegram(chat_id, msg)
         
     except Exception as e:
-        # Debug: Send the detailed error message back to the user
+        # Final catch-all debug
         send_telegram(chat_id, f"❌ CRITICAL ERROR (YFinance):\nSymbol: {yf_symbol}\nError Details: {str(e)}")
         return
 
