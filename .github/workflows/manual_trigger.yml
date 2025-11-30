@@ -1,0 +1,34 @@
+name: Instant Analysis Bot
+
+# This trigger waits for the "repository_dispatch" signal from Cloudflare
+on:
+  repository_dispatch:
+    types: [manual_trigger]
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Libraries
+        run: pip install -r requirements.txt
+
+      - name: Run Instant Analysis
+        env:
+          # We use your existing secrets
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN2 }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY2 }}
+          
+          # We extract the specific inputs sent by Cloudflare
+          TARGET_SYMBOL: ${{ github.event.client_payload.symbol }}
+          TARGET_CHAT_ID: ${{ github.event.client_payload.chat_id }}
+        run: |
+          echo "Received request for $TARGET_SYMBOL from $TARGET_CHAT_ID"
+          python instant_analyst.py --symbol "$TARGET_SYMBOL" --chat_id "$TARGET_CHAT_ID"
