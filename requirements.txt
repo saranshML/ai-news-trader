@@ -3,3 +3,4 @@ feedparser
 google-generativeai
 urllib3
 yfinance
+pypdf
