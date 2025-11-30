@@ -1,6 +1,7 @@
 requests
 feedparser
 google-generativeai
-urllib3
+pandas
+lxml
 yfinance
 pypdf
