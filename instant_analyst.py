@@ -127,17 +127,22 @@ def analyze_stock(symbol, chat_id):
         send_telegram(chat_id, msg)
         return
 
-   # --- 3. TECHNICAL FALLBACK CHECK (Lowest Priority) ---
+  # --- 3. TECHNICAL FALLBACK CHECK (Lowest Priority) ---
     try:
         # Ticker check is inside the function now, so we run the download
         data = yf.download(yf_symbol, period="100d", interval="1d", progress=False)
         
-        # Check if the downloaded data is empty (most common failure point)
-        if data.empty or data['Close'].isnull().all():
-             send_telegram(chat_id, f"❌ CRITICAL ERROR:\nSymbol: {symbol} has no recent data in yfinance or data is corrupted.")
+        # FIX 1 (CRITICAL): Clean the data by dropping any rows missing the close price.
+        data = data.dropna(subset=['Close'])
+        
+        # FIX 2: Ensure we have enough data (at least 50 days for the 50 DMA)
+        if data.empty or len(data) < 50:
+             send_telegram(chat_id, f"❌ CRITICAL ERROR:\nSymbol: {symbol} has insufficient valid data (got {len(data)} days, need 50).")
              return
             
         current_price = data['Close'].iloc[-1]
+        
+        # Calculate 50 DMA (This should now work on clean data)
         dma_50 = data['Close'].rolling(window=50).mean().iloc[-1]
         
         # --- Continue with the original logic ---
@@ -150,10 +155,9 @@ def analyze_stock(symbol, chat_id):
         send_telegram(chat_id, msg)
         
     except Exception as e:
-        # DEBUG: Send the detailed exception error message back to the user
+        # Debug: Send the detailed error message back to the user
         send_telegram(chat_id, f"❌ CRITICAL ERROR (YFinance):\nSymbol: {yf_symbol}\nError Details: {str(e)}")
         return
-
 
 if __name__ == "__main__":
     import json # Import json locally for the script's main run
