@@ -5,7 +5,9 @@ import requests
 import google.generativeai as genai
 import urllib.parse
 from datetime import datetime, timedelta
-import yfinance as yf # NEW: For fast technical data
+import yfinance as yf
+import pandas as pd  # <--- THIS WAS MISSING
+import json
 
 # --- CONFIGURATION ---
 BOT_TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
@@ -52,7 +54,7 @@ def get_ai_verdict(stock, context_type, content):
 # --- DATA FETCHING FUNCTIONS ---
 
 def check_for_quarterly_results(symbol):
-    # Search for latest results announced (simulating check on NSE/BSE announcements)
+    # Search for latest results announced 
     query = f"{symbol} quarterly results published"
     encoded_query = urllib.parse.quote(query)
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-IN&gl=IN&ceid=IN:en"
@@ -65,20 +67,18 @@ def check_for_quarterly_results(symbol):
             news_time = datetime(*entry.published_parsed[:6])
             if datetime.now() - news_time < timedelta(days=7):
                 
-                # If announcement found, scrape the screener page for the numbers
-                # This is the most reliable way to get structured data without PDF parsing
+                # If announcement found, scrape the screener page
                 screener_url = f"https://www.screener.in/company/{symbol.split('.')[0]}/"
                 headers = {"User-Agent": "Mozilla/5.0"}
                 try:
                     r = requests.get(screener_url, headers=headers, timeout=5)
-                    r.raise_for_status() # Raise error for bad status
+                    r.raise_for_status()
                     
-                    # Look for the 'Quarterly Results' table (often the second table)
+                    # Look for the 'Quarterly Results' table
                     dfs = pd.read_html(r.text)
                     if len(dfs) > 1:
-                        # Extract the latest column (the latest quarter)
+                        # Extract the latest column
                         latest_results = dfs[1].iloc[:, -1].to_dict()
-                        # Format for AI analysis
                         return f"Stock: {symbol}. Latest Quarter Results: {json.dumps(latest_results)}"
                 except Exception as e:
                     print(f"Error scraping Screener: {e}")
@@ -90,12 +90,10 @@ def analyze_stock(symbol, chat_id):
     yf_symbol = symbol if symbol.endswith('.NS') else f"{symbol}.NS"
     
     # --- 1. QUARTERLY RESULTS CHECK (Highest Priority) ---
-    financial_data = check_for_quarterly_results(symbol.split('.')[0]) # Pass symbol without .NS
+    financial_data = check_for_quarterly_results(symbol.split('.')[0])
     
     if financial_data:
-        # A. Analyze Financials
         ai_response = get_ai_verdict(symbol, "FINANCIALS", financial_data)
-        
         msg = (f"💰 **QTR RESULTS ANALYSIS: {symbol}**\n\n{ai_response}")
         send_telegram(chat_id, msg)
         return
@@ -115,7 +113,6 @@ def analyze_stock(symbol, chat_id):
                 recent_news.append({"title": entry.title, "link": entry.link})
 
     if recent_news:
-        # B. Analyze News
         top_story = recent_news[0]
         ai_response = get_ai_verdict(symbol, "NEWS", top_story['title'])
         
@@ -127,34 +124,25 @@ def analyze_stock(symbol, chat_id):
         send_telegram(chat_id, msg)
         return
 
- # --- 3. TECHNICAL FALLBACK CHECK (Lowest Priority) ---
+    # --- 3. TECHNICAL FALLBACK CHECK (Lowest Priority) ---
     try:
         data = yf.download(yf_symbol, period="100d", interval="1d", progress=False)
         
-        # --- FIX: FLATTEN MULTI-INDEX (The "Close" Key Error Fix) ---
+        # --- FIX: FLATTEN MULTI-INDEX ---
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
-        # -----------------------------------------------------------
+        # --------------------------------
 
-        # Check 1: Empty Data
         if data.empty:
-            send_telegram(chat_id, f"❌ YF ERROR: No data returned for {symbol}.")
+            send_telegram(chat_id, f"ℹ️ **No news or data found for {symbol}.**")
             return
 
-        # Check 2: Missing 'Close' column (even after flattening)
         if 'Close' not in data.columns:
-            cols = ", ".join(data.columns)
-            send_telegram(chat_id, f"❌ YF ERROR: Missing 'Close' column. Found: {cols}")
+            send_telegram(chat_id, f"❌ YF ERROR: Missing 'Close' column.")
             return
-        
-        # Data Cleanup
+
         data = data.dropna(subset=['Close'])
         
-        # Check 3: Insufficient Data Length
-        if len(data) < 50:
-             send_telegram(chat_id, f"❌ YF ERROR: Not enough data ({len(data)} days) for {symbol}.")
-             return
-            
         current_price = data['Close'].iloc[-1]
         dma_50 = data['Close'].rolling(window=50).mean().iloc[-1]
         
@@ -168,15 +156,12 @@ def analyze_stock(symbol, chat_id):
         
     except Exception as e:
         send_telegram(chat_id, f"❌ CRITICAL ERROR (YFinance):\nSymbol: {yf_symbol}\nError Details: {str(e)}")
-        return
+
 
 if __name__ == "__main__":
-    import json # Import json locally for the script's main run
-    
     parser = argparse.ArgumentParser()
     parser.add_argument("--symbol", help="Stock Symbol to analyze", required=True)
     parser.add_argument("--chat_id", help="User ID to reply to", required=True)
     args = parser.parse_args()
 
-    # Pass the NSE code without the .NS suffix to the scraper
     analyze_stock(args.symbol, args.chat_id)
