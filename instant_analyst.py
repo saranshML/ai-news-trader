@@ -131,26 +131,33 @@ def analyze_stock(symbol, chat_id):
     try:
         data = yf.download(yf_symbol, period="100d", interval="1d", progress=False)
         
-        # --- NEW DEBUGGER: Check for missing columns ---
-        if 'Close' not in data.columns:
-            columns = ", ".join(data.columns)
-            # Send the exact column names found
-            send_telegram(chat_id, f"❌ YF DATA ERROR:\nSymbol: {symbol} data is missing 'Close' column.\nColumns found: {columns}")
+        # --- FIX: FLATTEN MULTI-INDEX (The "Close" Key Error Fix) ---
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+        # -----------------------------------------------------------
+
+        # Check 1: Empty Data
+        if data.empty:
+            send_telegram(chat_id, f"❌ YF ERROR: No data returned for {symbol}.")
             return
-        # --- END DEBUGGER ---
+
+        # Check 2: Missing 'Close' column (even after flattening)
+        if 'Close' not in data.columns:
+            cols = ", ".join(data.columns)
+            send_telegram(chat_id, f"❌ YF ERROR: Missing 'Close' column. Found: {cols}")
+            return
         
-        # FIX 1: Clean the data immediately
+        # Data Cleanup
         data = data.dropna(subset=['Close'])
         
-        # FIX 2: Ensure sufficient data length
-        if data.empty or len(data) < 50:
-             send_telegram(chat_id, f"❌ YF DATA ERROR:\nSymbol: {symbol} has insufficient valid data (got {len(data)} days, need 50).")
+        # Check 3: Insufficient Data Length
+        if len(data) < 50:
+             send_telegram(chat_id, f"❌ YF ERROR: Not enough data ({len(data)} days) for {symbol}.")
              return
             
         current_price = data['Close'].iloc[-1]
         dma_50 = data['Close'].rolling(window=50).mean().iloc[-1]
         
-        # --- Continue with the original logic ---
         status = "BULLISH" if current_price > dma_50 else "BEARISH"
         diff_pct = ((current_price - dma_50) / dma_50) * 100
         
@@ -160,7 +167,6 @@ def analyze_stock(symbol, chat_id):
         send_telegram(chat_id, msg)
         
     except Exception as e:
-        # Final catch-all debug
         send_telegram(chat_id, f"❌ CRITICAL ERROR (YFinance):\nSymbol: {yf_symbol}\nError Details: {str(e)}")
         return
 
