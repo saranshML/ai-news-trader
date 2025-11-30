@@ -52,7 +52,7 @@ def analyze_pdf_report(symbol, pdf_url):
         print(f"📄 Extracted {len(text_content)} characters.")
 
         # Using Gemini 1.5 Pro (Best for long documents)
-        model = genai.GenerativeModel('gemini-1.5-pro') 
+        model = genai.GenerativeModel('gemini-2.5-pro') 
         
         prompt = (
             f"STOCK: {symbol}\n"
