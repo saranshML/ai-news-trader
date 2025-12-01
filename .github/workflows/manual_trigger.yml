@@ -28,8 +28,6 @@ jobs:
           TARGET_SYMBOL: ${{ github.event.client_payload.symbol }}
           TARGET_CHAT_ID: ${{ github.event.client_payload.chat_id }}
           TARGET_URL: ${{ github.event.client_payload.url }}
+          TARGET_MODE: ${{ github.event.client_payload.mode }} # <--- Capture Mode
         run: |
-          echo "Processing $TARGET_SYMBOL for $TARGET_CHAT_ID"
-          echo "Document URL: $TARGET_URL"
-          
-          python instant_analyst.py --symbol "$TARGET_SYMBOL" --chat_id "$TARGET_CHAT_ID" --url "$TARGET_URL"
+          python instant_analyst.py --symbol "$TARGET_SYMBOL" --chat_id "$TARGET_CHAT_ID" --url "$TARGET_URL" --mode "$TARGET_MODE"
