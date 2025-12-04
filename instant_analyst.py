@@ -10,7 +10,7 @@ import pandas as pd
 import json
 import io
 from pypdf import PdfReader
-from PIL import Image # NEW: For handling Chart Images
+from PIL import Image
 
 # --- CONFIGURATION ---
 BOT_TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
@@ -33,149 +33,183 @@ def send_telegram(chat_id, message):
         except Exception as e:
             print(f"Telegram Error: {e}")
 
-# --- FEATURE 1: 10% DROP SCANNER (Mathematical) ---
+# --- FEATURE 1: 10% DROP SCANNER ---
 def scan_for_crashes(chat_id):
-    """Scans watchlist for stocks down >10% from 52-Week High"""
-    send_telegram(chat_id, "📉 **Starting 10% Drop Scan...**")
-    
-    # 1. Load Watchlist
+    send_telegram(chat_id, "📉 **Scanning for >10% Corrections...**")
     try:
         with open('watchlist.txt', 'r') as f:
             stocks = [line.strip() + ".NS" if not line.strip().endswith('.NS') else line.strip() for line in f if line.strip()]
     except:
-        send_telegram(chat_id, "❌ Error: Could not read watchlist.txt")
+        send_telegram(chat_id, "❌ Error: watchlist.txt not found")
         return
 
-    # 2. Bulk Fetch Data (Faster)
     crashed_stocks = []
-    
     for symbol in stocks:
         try:
-            # Get last 3 months of data
             ticker = yf.Ticker(symbol)
             hist = ticker.history(period="3mo")
-            
             if hist.empty: continue
             
-            current_price = hist['Close'].iloc[-1]
-            recent_high = hist['High'].max()
+            curr = hist['Close'].iloc[-1]
+            high = hist['High'].max()
+            drop = ((curr - high) / high) * 100
             
-            drop_percentage = ((current_price - recent_high) / recent_high) * 100
-            
-            # CRITERIA: Down at least 10%
-            if drop_percentage <= -10:
-                # Check for "Stop" in fall (Green candle today or flat last 3 days)
-                is_stabilizing = False
-                last_3_days = hist['Close'].tail(3)
-                if hist['Close'].iloc[-1] > hist['Open'].iloc[-1]: # Today is Green
-                    is_stabilizing = True
-                
-                crashed_stocks.append({
-                    "symbol": symbol.replace('.NS', ''),
-                    "cmp": int(current_price),
-                    "high": int(recent_high),
-                    "drop": round(drop_percentage, 1),
-                    "stable": is_stabilizing
-                })
-        except:
-            continue
+            if drop <= -10:
+                stable = hist['Close'].iloc[-1] > hist['Open'].iloc[-1] # Green candle today?
+                crashed_stocks.append(f"**{symbol.replace('.NS','')}**\n📉 Drop: {drop:.1f}% | CMP: {int(curr)}\nStatus: {'🟢 Stabilizing' if stable else '🔴 Falling'}")
+        except: continue
 
-    # 3. Report Results
-    if not crashed_stocks:
-        send_telegram(chat_id, "✅ **Scan Complete:** No stocks are down >10% from recent highs.")
+    if crashed_stocks:
+        send_telegram(chat_id, "🚨 **OVERSOLD ALERT**\n\n" + "\n\n".join(crashed_stocks))
     else:
-        msg = "🚨 **OVERSOLD ALERT (Down >10%)**\n\n"
-        for s in crashed_stocks:
-            status = "🟢 Stabilizing" if s['stable'] else "🔴 Still Falling"
-            msg += f"**{s['symbol']}**\n📉 Drop: {s['drop']}%\n💰 CMP: {s['cmp']} (High: {s['high']})\nStauts: {status}\n\n"
-        send_telegram(chat_id, msg)
+        send_telegram(chat_id, "✅ No stocks are down >10% from recent highs.")
 
-# --- FEATURE 2: CHART VISION ANALYST (Visual) ---
+# --- FEATURE 2: CHART VISION ---
 def analyze_chart_image(symbol, image_url):
-    print(f"👁️ Analyzing Chart for {symbol}...")
     try:
-        # 1. Get Price Context
         yf_ticker = yf.Ticker(symbol if symbol.endswith('.NS') else f"{symbol}.NS")
-        price_data = yf_ticker.history(period="1d")
-        current_price = round(price_data['Close'].iloc[-1], 2) if not price_data.empty else "Unknown"
+        price = round(yf_ticker.history(period="1d")['Close'].iloc[-1], 2)
+    except: price = "Unknown"
 
-        # 2. Download Image
+    print(f"👁️ Vision Analysis for {symbol}...")
+    try:
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(image_url, headers=headers, stream=True, timeout=10)
-        response.raise_for_status()
-        
-        # Load image into Pillow
         img = Image.open(response.raw)
 
-        # 3. Vision Prompt (Gemini 1.5 Flash is best for Vision)
         model = genai.GenerativeModel('gemini-1.5-flash')
-        
         prompt = (
-            f"You are a Technical Analyst. This is a chart for {symbol}. Current Price (CMP): {current_price}.\n"
-            "Your Task: Identify the BEST BUY ZONES below the current price.\n"
-            "Look for:\n"
-            "1. Horizontal Support levels (previous bounce zones).\n"
-            "2. Trendline support.\n"
-            "3. 200 EMA support (if visible).\n\n"
-            "OUTPUT FORMAT (Telegraphic):\n"
-            "👁️ **CHART VISION: {symbol}**\n"
-            "💰 **CMP:** {current_price}\n\n"
-            "🎯 **TARGET BUY ZONES:**\n"
-            "1. **Zone 1 (Aggressive):** [Price] - [Reason: e.g., 50 EMA]\n"
-            "2. **Zone 2 (Safe):** [Price] - [Reason: e.g., Major Support]\n"
-            "3. **Zone 3 (Deep):** [Price] - [Reason: e.g., 200 EMA/Trendline]\n\n"
-            "🛑 **STOP LOSS:** [Price Level] (Below key structure)\n"
-            "⚖️ **VERDICT:** [WAIT FOR DIP / BUY NOW / AVOID]"
+            f"Asset: {symbol} | CMP: {price}\n"
+            "Task: Identify Support Levels & Buy Zones below CMP from this chart.\n"
+            "Output: Telegraphic. Fragments only.\n"
+            "FORMAT:\n"
+            "👁️ **VISION: {symbol}**\n"
+            "💰 **CMP:** {price}\n"
+            "🎯 **TARGETS:**\n1. [Price] ([Reason])\n2. [Price] ([Reason])\n"
+            "🛑 **STOP:** [Price]\n"
+            "⚖️ **VERDICT:** [WAIT/BUY]"
         )
-        
-        # Pass both text and image to Gemini
         response = model.generate_content([prompt, img])
         return response.text.strip()
-
     except Exception as e:
-        return f"❌ Vision Error: {str(e)}"
+        return f"❌ Vision Error: {e}"
 
-# --- EXISTING PDF & TEXT ANALYZERS ---
+# --- FEATURE 3: PDF ANALYZER (DUAL MODE: 3-3-3 OR FUT) ---
 def analyze_pdf_report(symbol, pdf_url, mode="STANDARD"):
-    # ... (Keep your existing PDF logic exactly as it was) ...
-    # For brevity, I am assuming you paste your previous 'analyze_pdf_report' function here.
-    # If you need me to paste the full block again, let me know.
-    return "PDF Analysis Placeholder (Paste previous logic here)"
+    print(f"📥 Analyzing PDF ({mode})...")
+    try:
+        # 1. Price Context
+        yf_ticker = yf.Ticker(symbol if symbol.endswith('.NS') else f"{symbol}.NS")
+        hist = yf_ticker.history(period="1d")
+        price = round(hist['Close'].iloc[-1], 2) if not hist.empty else 0
 
-def get_ai_verdict(stock, content):
-    # ... (Keep existing logic) ...
-    return "News Analysis Placeholder"
+        # 2. Download
+        r = requests.get(pdf_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        f = io.BytesIO(r.content)
+        reader = PdfReader(f)
+        text = ""
+        max_pg = 30 if mode == "FUTURE" else 15
+        for i in range(min(len(reader.pages), max_pg)):
+            t = reader.pages[i].extract_text()
+            if t: text += t
 
-# --- MAIN CONTROLLER (Updated for TARGET command) ---
+        # 3. Select Prompt
+        model = genai.GenerativeModel('gemini-2.5-pro')
+        
+        if mode == "FUTURE":
+            # STRATEGIC OUTLOOK (Detailed)
+            prompt = (
+                f"CTX: STOCK {symbol} | CMP {price} | TYPE: FILING\n"
+                f"DATA: {text[:90000]}\n"
+                "TASK: Analyze for FUTURE GROWTH & STRATEGY.\n"
+                "OUTPUT:\n"
+                "🚀 **STRATEGIC OUTLOOK: {symbol}**\n"
+                "1️⃣ **Long Term:** (Vision, Moat, CapEx)\n"
+                "2️⃣ **Near Term:** (Guidance, Drivers)\n"
+                "3️⃣ **Tone:** (Mgmt Confidence, Timelines)\n"
+                "🎯 **VERDICT:** [Growth/Stable/Risk]"
+            )
+        else:
+            # TELEGRAPHIC 3-3-3 (Optimized)
+            prompt = (
+                f"CTX: STOCK {symbol} | CMP {price} | TYPE: FILING\n"
+                f"DATA: {text[:30000]}\n"
+                "TASK: Telegraphic 3-3-3 Analysis. No filler words.\n"
+                "OUTPUT:\n"
+                "📊 **ANALYSIS: {symbol}**\n"
+                "💰 **CMP:** {price}\n"
+                "🎯 **BUY:** [Zone] | **STOP:** [Level]\n\n"
+                "✅ **PROS:**\n1. [Pt]\n2. [Pt]\n3. [Pt]\n\n"
+                "⚠️ **CONS:**\n1. [Pt]\n2. [Pt]\n3. [Pt]\n\n"
+                "💡 **HIGHLIGHTS:**\n1. [Pt]\n2. [Pt]\n3. [Pt]\n\n"
+                "⚖️ **VERDICT:** [BULL/BEAR]"
+            )
+
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        return f"❌ PDF Error: {e}"
+
+# --- FEATURE 4: STANDARD AUTO-ANALYSIS ---
 def analyze_stock(symbol, chat_id, specific_url=None, mode="STANDARD"):
-    
-    # 1. SPECIAL COMMAND: SCAN
+    # 1. SCAN COMMAND
     if symbol.upper() == "SCAN":
         scan_for_crashes(chat_id)
         return
 
-    # 2. TARGET COMMAND (Chart Analysis)
+    # 2. TARGET COMMAND (Vision)
     if mode == "TARGET" and specific_url:
         send_telegram(chat_id, f"👁️ **Reading Chart...**\n`{specific_url}`")
         analysis = analyze_chart_image(symbol, specific_url)
         send_telegram(chat_id, analysis)
         return
 
-    # 3. PDF ANALYSIS (Existing)
+    # 3. PDF ANALYSIS (FUT or STANDARD)
     if specific_url and "pdf" in specific_url.lower():
-        # ... (Call analyze_pdf_report) ...
-        pass
+        header = "🔮 **Future Outlook...**" if mode == "FUTURE" else "🔄 **Reading Doc...**"
+        send_telegram(chat_id, f"{header}\n`{specific_url.split('/')[-1]}`")
+        analysis = analyze_pdf_report(symbol, specific_url, mode)
+        send_telegram(chat_id, analysis)
+        return
 
-    # 4. STANDARD ANALYSIS (News/Tech)
-    # ... (Keep existing standard logic) ...
+    # 4. DEFAULT: NEWS + TECHNICALS
+    yf_symbol = symbol if symbol.endswith('.NS') else f"{symbol}.NS"
+    
+    # News
+    query = f"{symbol} share news india"
+    rss = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=en-IN&gl=IN&ceid=IN:en"
+    feed = feedparser.parse(rss)
+    news = [e for e in feed.entries[:3] if datetime.now() - datetime(*e.published_parsed[:6]) < timedelta(hours=48)]
+    
+    if news:
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        ai = model.generate_content(f"STOCK: {symbol}. NEWS: {news[0].title}. Telegraphic verdict.").text
+        send_telegram(chat_id, f"📰 **NEWS: {symbol}**\n{ai}\n🔗 [Link]({news[0].link})")
+        return
+
+    # Technical Fallback
+    try:
+        d = yf.download(yf_symbol, period="100d", interval="1d", progress=False)
+        if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.get_level_values(0)
+        
+        if 'Close' in d.columns:
+            d = d.dropna(subset=['Close'])
+            if len(d) > 50:
+                cur = d['Close'].iloc[-1]
+                avg = d['Close'].rolling(50).mean().iloc[-1]
+                status = "BULLISH" if cur > avg else "BEARISH"
+                diff = ((cur - avg) / avg) * 100
+                send_telegram(chat_id, f"📉 **Tech: {symbol}**\nVerdict: {status}\nVs 50DMA: {diff:.2f}%")
+            else: send_telegram(chat_id, f"ℹ️ No Data: {symbol}")
+    except: send_telegram(chat_id, f"❌ Error scanning {symbol}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--symbol", required=True)
     parser.add_argument("--chat_id", required=True)
-    parser.add_argument("--url", default="", help="Optional URL")
-    parser.add_argument("--mode", default="STANDARD", help="Analysis Mode")
+    parser.add_argument("--url", default="")
+    parser.add_argument("--mode", default="STANDARD")
     args = parser.parse_args()
 
     analyze_stock(args.symbol, args.chat_id, args.url, args.mode)
-                              
+        
