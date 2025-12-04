@@ -10,7 +10,6 @@ import pandas as pd
 import json
 import io
 from pypdf import PdfReader
-from PIL import Image
 
 # --- CONFIGURATION ---
 BOT_TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
@@ -21,10 +20,12 @@ genai.configure(api_key=GEMINI_API_KEY)
 # --- TELEGRAM HELPER ---
 def send_telegram(chat_id, message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    chunk_size = 4000 
+    chunk_size = 4000
     for i in range(0, len(message), chunk_size):
         chunk = message[i:i+chunk_size]
-        payload = {"chat_id": chat_id, "text": chunk, "parse_mode": "Markdown", "disable_web_page_preview": True}
+        payload = {
+            "chat_id": chat_id, "text": chunk, "parse_mode": "Markdown", "disable_web_page_preview": True
+        }
         try:
             r = requests.post(url, json=payload)
             if r.status_code != 200:
@@ -33,183 +34,143 @@ def send_telegram(chat_id, message):
         except Exception as e:
             print(f"Telegram Error: {e}")
 
-# --- FEATURE 1: 10% DROP SCANNER ---
-def scan_for_crashes(chat_id):
-    send_telegram(chat_id, "📉 **Scanning for >10% Corrections...**")
-    try:
-        with open('watchlist.txt', 'r') as f:
-            stocks = [line.strip() + ".NS" if not line.strip().endswith('.NS') else line.strip() for line in f if line.strip()]
-    except:
-        send_telegram(chat_id, "❌ Error: watchlist.txt not found")
-        return
-
-    crashed_stocks = []
-    for symbol in stocks:
-        try:
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="3mo")
-            if hist.empty: continue
-            
-            curr = hist['Close'].iloc[-1]
-            high = hist['High'].max()
-            drop = ((curr - high) / high) * 100
-            
-            if drop <= -10:
-                stable = hist['Close'].iloc[-1] > hist['Open'].iloc[-1] # Green candle today?
-                crashed_stocks.append(f"**{symbol.replace('.NS','')}**\n📉 Drop: {drop:.1f}% | CMP: {int(curr)}\nStatus: {'🟢 Stabilizing' if stable else '🔴 Falling'}")
-        except: continue
-
-    if crashed_stocks:
-        send_telegram(chat_id, "🚨 **OVERSOLD ALERT**\n\n" + "\n\n".join(crashed_stocks))
-    else:
-        send_telegram(chat_id, "✅ No stocks are down >10% from recent highs.")
-
-# --- FEATURE 2: CHART VISION ---
-def analyze_chart_image(symbol, image_url):
-    try:
-        yf_ticker = yf.Ticker(symbol if symbol.endswith('.NS') else f"{symbol}.NS")
-        price = round(yf_ticker.history(period="1d")['Close'].iloc[-1], 2)
-    except: price = "Unknown"
-
-    print(f"👁️ Vision Analysis for {symbol}...")
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(image_url, headers=headers, stream=True, timeout=10)
-        img = Image.open(response.raw)
-
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = (
-            f"Asset: {symbol} | CMP: {price}\n"
-            "Task: Identify Support Levels & Buy Zones below CMP from this chart.\n"
-            "Output: Telegraphic. Fragments only.\n"
-            "FORMAT:\n"
-            "👁️ **VISION: {symbol}**\n"
-            "💰 **CMP:** {price}\n"
-            "🎯 **TARGETS:**\n1. [Price] ([Reason])\n2. [Price] ([Reason])\n"
-            "🛑 **STOP:** [Price]\n"
-            "⚖️ **VERDICT:** [WAIT/BUY]"
-        )
-        response = model.generate_content([prompt, img])
-        return response.text.strip()
-    except Exception as e:
-        return f"❌ Vision Error: {e}"
-
-# --- FEATURE 3: PDF ANALYZER (DUAL MODE: 3-3-3 OR FUT) ---
+# --- PDF ANALYZER (DUAL MODE) ---
 def analyze_pdf_report(symbol, pdf_url, mode="STANDARD"):
-    print(f"📥 Analyzing PDF ({mode})...")
+    print(f"📥 Fetching PDF & Price Data (Mode: {mode})...")
     try:
         # 1. Price Context
         yf_ticker = yf.Ticker(symbol if symbol.endswith('.NS') else f"{symbol}.NS")
-        hist = yf_ticker.history(period="1d")
-        price = round(hist['Close'].iloc[-1], 2) if not hist.empty else 0
+        price_data = yf_ticker.history(period="1d")
+        current_price = round(price_data['Close'].iloc[-1], 2) if not price_data.empty else 0
 
-        # 2. Download
-        r = requests.get(pdf_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        # 2. Download PDF
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(pdf_url, headers=headers, timeout=15)
+        r.raise_for_status()
+        
+        # 3. Extract Text
         f = io.BytesIO(r.content)
         reader = PdfReader(f)
-        text = ""
-        max_pg = 30 if mode == "FUTURE" else 15
-        for i in range(min(len(reader.pages), max_pg)):
-            t = reader.pages[i].extract_text()
-            if t: text += t
+        text_content = ""
+        max_pages = min(len(reader.pages), 30) # 30 pages for deep reading
+        for i in range(max_pages):
+            text = reader.pages[i].extract_text()
+            if text: text_content += text
 
-        # 3. Select Prompt
-        model = genai.GenerativeModel('gemini-2.5-pro')
+        # 4. Select Prompt Based on Mode
+        model = genai.GenerativeModel('gemini-2.5-pro') 
         
         if mode == "FUTURE":
-            # STRATEGIC OUTLOOK (Detailed)
+            # --- PROMPT A: STRATEGIC FUTURE OUTLOOK ---
             prompt = (
-                f"CTX: STOCK {symbol} | CMP {price} | TYPE: FILING\n"
-                f"DATA: {text[:90000]}\n"
-                "TASK: Analyze for FUTURE GROWTH & STRATEGY.\n"
-                "OUTPUT:\n"
-                "🚀 **STRATEGIC OUTLOOK: {symbol}**\n"
-                "1️⃣ **Long Term:** (Vision, Moat, CapEx)\n"
-                "2️⃣ **Near Term:** (Guidance, Drivers)\n"
-                "3️⃣ **Tone:** (Mgmt Confidence, Timelines)\n"
-                "🎯 **VERDICT:** [Growth/Stable/Risk]"
+                f"CTX: STOCK {symbol} | CMP {current_price} | DOC TYPE: Corporate Filing\n"
+                f"DOC TEXT (First {max_pages} pgs): {text_content[:90000]}\n"
+                "ROLE: Senior Growth Strategist.\n"
+                "TASK: Analyze specifically for FUTURE PROSPECTS & GROWTH STRATEGY.\n"
+                "INSTRUCTIONS: Detect doc type (Annual/Quarterly/Concall) and extract forward-looking info.\n\n"
+                "OUTPUT FORMAT (Strictly):\n"
+                "🚀 **STRATEGIC FUTURE OUTLOOK: {symbol}**\n\n"
+                "1️⃣ **Strategic Outlook (Long Term):**\n"
+                "(Focus: Vision, Moat, CapEx 3-5yrs)\n\n"
+                "2️⃣ **Near-Term Guidance:**\n"
+                "(Focus: Revenue/Margin Forecasts, Growth Drivers)\n\n"
+                "3️⃣ **Management Tone & Specifics:**\n"
+                "(Focus: Confidence level, RoCE targets, Project Timelines)\n\n"
+                "🎯 **GROWTH VERDICT:** [High Growth / Stable / Risk] | [Confidence %]"
             )
         else:
-            # TELEGRAPHIC 3-3-3 (Optimized)
+            # --- PROMPT B: STANDARD 3-3-3 RULE (Telegraphic) ---
             prompt = (
-                f"CTX: STOCK {symbol} | CMP {price} | TYPE: FILING\n"
-                f"DATA: {text[:30000]}\n"
-                "TASK: Telegraphic 3-3-3 Analysis. No filler words.\n"
-                "OUTPUT:\n"
+                f"CTX: STOCK {symbol} | CMP {current_price} | TYPE: FILING\n"
+                f"DATA: {text_content[:30000]}\n"
+                "ROLE: Quant Algo. MODE: Telegraphic. No filler words.\n"
+                "TASK: 3-3-3 RULE. List exactly 3 PROS, 3 CONS, 3 HIGHLIGHTS.\n"
+                "STYLE: Fragment sentences. Data dense.\n\n"
+                "OUTPUT FORMAT:\n"
                 "📊 **ANALYSIS: {symbol}**\n"
-                "💰 **CMP:** {price}\n"
-                "🎯 **BUY:** [Zone] | **STOP:** [Level]\n\n"
-                "✅ **PROS:**\n1. [Pt]\n2. [Pt]\n3. [Pt]\n\n"
-                "⚠️ **CONS:**\n1. [Pt]\n2. [Pt]\n3. [Pt]\n\n"
-                "💡 **HIGHLIGHTS:**\n1. [Pt]\n2. [Pt]\n3. [Pt]\n\n"
-                "⚖️ **VERDICT:** [BULL/BEAR]"
+                "💰 **CMP:** {current_price}\n"
+                "🎯 **BUY:** [Range] | **STOP:** [Level]\n\n"
+                "✅ **PROS:**\n1. [Point]\n2. [Point]\n3. [Point]\n\n"
+                "⚠️ **CONS:**\n1. [Point]\n2. [Point]\n3. [Point]\n\n"
+                "💡 **HIGHLIGHTS:**\n1. [Point]\n2. [Point]\n3. [Point]\n\n"
+                "⚖️ **VERDICT:** [BULL/BEAR] | [Conf%]"
             )
-
+        
         response = model.generate_content(prompt)
         return response.text.strip()
+
     except Exception as e:
-        return f"❌ PDF Error: {e}"
+        return f"❌ Analysis Failed: {str(e)}"
 
-# --- FEATURE 4: STANDARD AUTO-ANALYSIS ---
+# --- STANDARD ANALYZERS ---
+def get_ai_verdict(stock, content):
+    try:
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        prompt = f"STOCK: {stock}. DATA: {content}. OUTPUT: Telegraphic style. Verdict: [BUY/SELL] | Reason."
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except:
+        return "Error in AI."
+
+def check_for_quarterly_results(symbol):
+    return None # Simplified for this update
+
 def analyze_stock(symbol, chat_id, specific_url=None, mode="STANDARD"):
-    # 1. SCAN COMMAND
-    if symbol.upper() == "SCAN":
-        scan_for_crashes(chat_id)
-        return
-
-    # 2. TARGET COMMAND (Vision)
-    if mode == "TARGET" and specific_url:
-        send_telegram(chat_id, f"👁️ **Reading Chart...**\n`{specific_url}`")
-        analysis = analyze_chart_image(symbol, specific_url)
-        send_telegram(chat_id, analysis)
-        return
-
-    # 3. PDF ANALYSIS (FUT or STANDARD)
-    if specific_url and "pdf" in specific_url.lower():
-        header = "🔮 **Future Outlook...**" if mode == "FUTURE" else "🔄 **Reading Doc...**"
-        send_telegram(chat_id, f"{header}\n`{specific_url.split('/')[-1]}`")
+    # --- PATH A: PDF DEEP DIVE ---
+    if specific_url and len(specific_url) > 5:
+        msg_header = "🔮 **Analyzing Future Outlook...**" if mode == "FUTURE" else "🔄 **Processing Doc...**"
+        send_telegram(chat_id, f"{msg_header}\n`{specific_url.split('/')[-1]}`")
+        
         analysis = analyze_pdf_report(symbol, specific_url, mode)
         send_telegram(chat_id, analysis)
         return
 
-    # 4. DEFAULT: NEWS + TECHNICALS
+    # --- PATH B: AUTO SCAN (Standard 3-3-3 logic applies here) ---
     yf_symbol = symbol if symbol.endswith('.NS') else f"{symbol}.NS"
     
-    # News
+    # Simple News Check
     query = f"{symbol} share news india"
-    rss = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=en-IN&gl=IN&ceid=IN:en"
-    feed = feedparser.parse(rss)
-    news = [e for e in feed.entries[:3] if datetime.now() - datetime(*e.published_parsed[:6]) < timedelta(hours=48)]
+    rss_url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=en-IN&gl=IN&ceid=IN:en"
+    feed = feedparser.parse(rss_url)
     
-    if news:
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        ai = model.generate_content(f"STOCK: {symbol}. NEWS: {news[0].title}. Telegraphic verdict.").text
-        send_telegram(chat_id, f"📰 **NEWS: {symbol}**\n{ai}\n🔗 [Link]({news[0].link})")
+    recent_news = []
+    for entry in feed.entries[:3]:
+        if hasattr(entry, 'published_parsed'):
+            if datetime.now() - datetime(*entry.published_parsed[:6]) < timedelta(hours=48):
+                recent_news.append(entry)
+
+    if recent_news:
+        ai_resp = get_ai_verdict(symbol, recent_news[0]['title'])
+        send_telegram(chat_id, f"📰 **NEWS: {symbol}**\n{ai_resp}\n🔗 [Link]({recent_news[0]['link']})")
         return
 
     # Technical Fallback
     try:
-        d = yf.download(yf_symbol, period="100d", interval="1d", progress=False)
-        if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.get_level_values(0)
+        data = yf.download(yf_symbol, period="100d", interval="1d", progress=False)
+        if isinstance(data.columns, pd.MultiIndex): data.columns = data.columns.get_level_values(0)
         
-        if 'Close' in d.columns:
-            d = d.dropna(subset=['Close'])
-            if len(d) > 50:
-                cur = d['Close'].iloc[-1]
-                avg = d['Close'].rolling(50).mean().iloc[-1]
-                status = "BULLISH" if cur > avg else "BEARISH"
-                diff = ((cur - avg) / avg) * 100
-                send_telegram(chat_id, f"📉 **Tech: {symbol}**\nVerdict: {status}\nVs 50DMA: {diff:.2f}%")
-            else: send_telegram(chat_id, f"ℹ️ No Data: {symbol}")
-    except: send_telegram(chat_id, f"❌ Error scanning {symbol}")
+        if 'Close' in data.columns:
+            data = data.dropna(subset=['Close'])
+            if len(data) > 50:
+                cur = data['Close'].iloc[-1]
+                dma = data['Close'].rolling(50).mean().iloc[-1]
+                status = "BULLISH" if cur > dma else "BEARISH"
+                diff = ((cur - dma) / dma) * 100
+                msg = f"📉 **Tech:** {symbol}\nStart: {status}\nVs 50DMA: {diff:.2f}%"
+                send_telegram(chat_id, msg)
+            else:
+                send_telegram(chat_id, f"ℹ️ No Data: {symbol}")
+        else:
+            send_telegram(chat_id, f"❌ Data Error: {symbol}")
+    except Exception as e:
+        send_telegram(chat_id, f"❌ Error: {e}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--symbol", required=True)
     parser.add_argument("--chat_id", required=True)
-    parser.add_argument("--url", default="")
-    parser.add_argument("--mode", default="STANDARD")
+    parser.add_argument("--url", default="", help="Optional PDF URL")
+    parser.add_argument("--mode", default="STANDARD", help="Analysis Mode: STANDARD or FUTURE")
     args = parser.parse_args()
 
     analyze_stock(args.symbol, args.chat_id, args.url, args.mode)
-        
