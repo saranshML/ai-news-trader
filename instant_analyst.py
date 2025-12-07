@@ -58,7 +58,7 @@ def analyze_pdf_report(symbol, pdf_url, mode="STANDARD"):
             if text: text_content += text
 
         # 4. Select Prompt Based on Mode
-        model = genai.GenerativeModel('gemini-2.5-pro') 
+        model = genai.GenerativeModel('gemini-2.5-flash') 
         
         if mode == "FUTURE":
             # --- PROMPT A: STRATEGIC FUTURE OUTLOOK ---
